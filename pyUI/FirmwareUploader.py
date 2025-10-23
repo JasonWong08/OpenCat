@@ -11,6 +11,7 @@ from commonVar import *
 # from subprocess import check_call
 import subprocess
 import threading
+import queue  # For thread-safe message passing
 from tkinter import ttk
 from tkinter import filedialog
 import pathlib
@@ -69,6 +70,8 @@ class Uploader:
         # for BiBoard, the mode is the same between Bittle and Nybble now
         self.BiBoardModes = list(map(lambda x: txt(x), ['Standard']))
         self.inv_txt = {v: k for k, v in language.items()}
+        self.previousPortList = []  # Track previous port list for detecting new ports
+        self.portUpdateQueue = queue.Queue()  # Thread-safe queue for port updates
         self.initWidgets()
         if self.strProduct.get() == 'Bittle X' or self.strProduct.get() == 'Bittle X+Arm' or self.strProduct.get() == 'Nybble Q':
             board_version_list = BiBoard_version_list
@@ -86,6 +89,9 @@ class Uploader:
                              args=(goodPorts, lambda: self.keepChecking, False, self.updatePortlist))
         t.daemon = True
         t.start()
+        
+        # Start processing port updates in main thread
+        self.win.after(500, self.processPortUpdates)
 
         self.win.focus_force()    # force the main interface to get focus
         self.win.mainloop()
@@ -307,6 +313,7 @@ class Uploader:
         self.autoupload()
 
     def updatePortlist(self):
+        """Called from background thread - MUST NOT access any Tkinter objects directly"""
         port_number_list = []
         if len(portStrList) == 0:
             port_number_list = [' ']
@@ -318,13 +325,43 @@ class Uploader:
                 logger.debug(f"{portName}")
                 port_number_list.append(portName)
             logger.debug(f"port_number_list is {port_number_list}")
-        if self.OSname == 'aqua':
-            self.updatePort()
-        else:
-            self.cbPort.set(port_number_list[0])
-            # set list for Combobox
-            self.cbPort['values'] = port_number_list
+        
+        # Put port list update into queue (thread-safe)
+        self.portUpdateQueue.put(port_number_list)
 
+    def processPortUpdates(self):
+        """Process port updates from queue (runs in main thread)"""
+        try:
+            while not self.portUpdateQueue.empty():
+                port_number_list = self.portUpdateQueue.get_nowait()
+                
+                # Detect new ports
+                current_ports = set(port_number_list) - {' '}
+                previous_ports = set(self.previousPortList) - {' '}
+                new_ports = current_ports - previous_ports
+                
+                # Show notification for new ports
+                if new_ports:
+                    for port in new_ports:
+                        messagebox.showinfo(title=txt('Info'), message=txt('New port prompt') + port)
+                
+                # Update previous port list
+                self.previousPortList = port_number_list.copy()
+                
+                # Update UI
+                if self.OSname == 'aqua':
+                    self.updatePort()
+                else:
+                    if port_number_list:
+                        self.cbPort.set(port_number_list[0])
+                    # set list for Combobox
+                    self.cbPort['values'] = port_number_list
+        except queue.Empty:
+            pass
+        
+        # Schedule next check
+        self.win.after(500, self.processPortUpdates)  # Check every 500ms
+    
     def about(self):
         self.msgbox = messagebox.showinfo(txt('titleVersion'), txt('msgVersion'))
         self.force_focus()

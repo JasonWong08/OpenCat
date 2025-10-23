@@ -178,12 +178,13 @@ def serialWriteByte(port, var=None):
 
 
 def printSerialMessage(port, token, timeout=0):
-    if token == 'k' or token == 'K':
+    if 'X' in token:
+        token = 'X'
+
+    if token == 'k' or token == 'K' or token == 'X':
         threshold = 8
     else:
         threshold = 3
-    if 'X' in token:
-        token = 'X'
     startTime = time.time()
     allPrints = ''
     while True:
@@ -203,7 +204,9 @@ def printSerialMessage(port, token, timeout=0):
                     # print(response, flush=True)
                     allPrints += response
         now = time.time()
-        if (now - startTime) > threshold:
+        timePassed = now - startTime
+        logger.debug(f"time passed is: {timePassed}")
+        if timePassed > threshold:
             # print('Elapsed time: ', end='')
             # print(threshold, end=' seconds\n', flush=True)
             logger.debug(f"Elapsed time: {threshold} seconds")
@@ -238,7 +241,7 @@ def sendTask(PortList, port, task, timeout=0):  # task Structure is [token, var=
                 #        print('c') #which case
                 serialWriteByte(port, task[1])
             token = task[0][0]
-#            printH("token",token)
+            # printH("token is:",token)
             if token == 'I' or token =='L':
                 timeout = 1 # in case the UI gets stuck
             lastMessage = printSerialMessage(port, token, timeout)
@@ -688,7 +691,10 @@ def testPort(PortList, serialObject, p):
             result = result.read_all().decode('ISO-8859-1')
             if result != '':
                 print('Waiting for the robot to boot up')
-                time.sleep(2)
+                t = 2
+                logger.debug(f"time delay: {t}s.")
+                time.sleep(t)
+                
                 waitTime = 3
             else:
                 waitTime = 2
@@ -760,7 +766,7 @@ def keepCheckingPort(portList, cond1=None, check=True, updateFunc = lambda:None)
                     logger.debug(f"Adding serial port: {p}")
                     portName = p.split('/')[-1]
                     portStrList.insert(0, portName)  # remove '/dev/' in the port name
-                    tk.messagebox.showinfo(title=txt('Info'), message=txt('New port prompt') + portName)
+                    # Note: Do NOT show messagebox here as this runs in a background thread
             updateFunc()
         elif set(allPorts) - set(currentPorts):
             time.sleep(1) #usbmodem is slower in detection
@@ -980,6 +986,9 @@ def replug(PortList, needSendTask=True, needOpenPort=True):
 def selectList(PortList,ls,win, portMap, needSendTask=True, needOpenPort=True):
     
     global goodPortCount
+    success = False
+    error_msg = None
+    
     for i in ls.curselection():
         displayName = ls.get(i)
         p = portMap.get(displayName, displayName)
@@ -997,17 +1006,27 @@ def selectList(PortList,ls,win, portMap, needSendTask=True, needOpenPort=True):
                 time.sleep(2)
                 result = sendTask(PortList, serialObject, ['?', 0])
                 getModelAndVersion(result)
-            win.withdraw()
+            success = True
 
         except Exception as e:
-            tk.messagebox.showwarning(title=txt('Warning'), message=txt('* Port ') + p + txt(' cannot be opened'))
+            error_msg = txt('* Port ') + p + txt(' cannot be opened')
+            logger.error(f"Cannot open {p}: {e}")
             print("Cannot open {}".format(p))
-            raise e
+    
+    # Close window first, then show any error messages
     win.destroy()
+    
+    if error_msg and not success:
+        tk.messagebox.showwarning(title=txt('Warning'), message=error_msg)
 
 def manualSelect(PortList, window, needSendTask=True, needOpenPort=True):
     # allPorts = deleteDuplicatedUsbSerial(Communication.Print_Used_Com())
     allPorts = Communication.Print_Used_Com()
+    
+    # Clear previous widgets to avoid conflicts
+    for widget in window.winfo_children():
+        widget.destroy()
+    
     window.title(txt('Manual mode'))
     # Make window reasonably sized and resizable
     try:
@@ -1055,8 +1074,11 @@ def manualSelect(PortList, window, needSendTask=True, needOpenPort=True):
     bu.grid(row=2, column=1, sticky='n', padx=5, pady=5)
     bu2 = tk.Button(window, text=txt('Refresh'), command=lambda:refreshBox(ls))
     bu2.grid(row=1, column=1, sticky='n', padx=5)
-    tk.messagebox.showwarning(title=txt('Warning'), message=txt('Manual mode'))
-    window.mainloop()
+    
+    # Show info message after window is ready, using after to avoid blocking
+    window.after(100, lambda: tk.messagebox.showinfo(title=txt('Info'), message=txt('Manual mode')))
+    
+    # Note: Do NOT call mainloop() here as the parent window already has one running
 
 def monitoringVoltage(ports, VoltagePin, timer, callback):
     while True and len(ports):
