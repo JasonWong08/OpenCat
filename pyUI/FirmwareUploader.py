@@ -325,9 +325,21 @@ class Uploader:
         if self.OSname == 'aqua':
             self.updatePort()
         else:
-            if port_number_list:
-                self.cbPort.set(port_number_list[0])
+            # Get current selection before updating list
+            currentSelection = self.strPort.get()
+            
+            # Update the combobox values
             self.cbPort['values'] = port_number_list
+            
+            # Preserve user's selection if it's still valid, otherwise select first port
+            if currentSelection and currentSelection in port_number_list:
+                # Keep current selection - user's choice should be preserved
+                self.cbPort.set(currentSelection)
+                logger.debug(f"Preserved user's port selection: {currentSelection}")
+            elif port_number_list:
+                # Only change to first port if current selection is invalid or empty
+                self.cbPort.set(port_number_list[0])
+                logger.debug(f"Auto-selected first port: {port_number_list[0]}")
 
     def checkPortsMainThread(self):
         """Check ports in main thread using timer (safe for macOS)"""
@@ -397,27 +409,40 @@ class Uploader:
         if self.OSname == 'aqua':
             list = copy.deepcopy(portStrList)
             boardVer = self.strBoardVersion.get()
+            
+            # Get current selection before updating
+            currentSelection = self.strPort.get()
+            
             if boardVer in NyBoard_version_list:
                 if len(list) > 0:
                     itemSet = " "
                     for item in list:
                         if 'usbmodem' in item:  # prefer the USB modem device because it can restart the NyBoard
-                            itemSet = itemSet
+                            itemSet = item
                             break
                         elif 'usbserial-' in item:  # prefer the "serial-" device
-                            itemSet = itemSet
+                            itemSet = item
                             break
-                            
+                    
+                    # Remove unwanted ports (need to use list() to avoid modification during iteration)
+                    items_to_remove = []
                     for item in list:
-                        if 'wchusbserial' in item:
-                            list.remove(item)
-                        elif 'cu.SLAB_USBtoUART' in item:
-                            list.remove(item)
-                    if itemSet != " ":
-                        self.cbPort.set(itemSet)
-                    else:
-                        self.cbPort.set(list[0])
+                        if 'wchusbserial' in item or 'cu.SLAB_USBtoUART' in item:
+                            items_to_remove.append(item)
+                    for item in items_to_remove:
+                        list.remove(item)
+                    
+                    # Update values first
                     self.cbPort['values'] = list
+                    
+                    # Preserve user's selection if it's still valid
+                    if currentSelection and currentSelection in list:
+                        self.cbPort.set(currentSelection)
+                        logger.debug(f"Preserved user's port selection: {currentSelection}")
+                    elif itemSet != " " and itemSet in list:
+                        self.cbPort.set(itemSet)
+                    elif len(list) > 0:
+                        self.cbPort.set(list[0])
             elif boardVer == "BiBoard_V1_0":
                 if len(list) > 0:
                     itemSet = " "
@@ -428,21 +453,36 @@ class Uploader:
                         elif 'serial-' in item:  # prefer the "serial-" device
                             itemSet = item
                             break
-                            
+                    
+                    # Remove unwanted ports (need to use list() to avoid modification during iteration)
+                    items_to_remove = []
                     for item in list:
-                        if 'usbmodem' in item:
-                            list.remove(item)
-                        elif 'cu.SLAB_USBtoUART' in item:
-                            list.remove(item)
-                    if itemSet != " ":
-                        self.cbPort.set(itemSet)
-                    else:
-                        self.cbPort.set(list[0])
+                        if 'usbmodem' in item or 'cu.SLAB_USBtoUART' in item:
+                            items_to_remove.append(item)
+                    for item in items_to_remove:
+                        list.remove(item)
+                    
+                    # Update values first
                     self.cbPort['values'] = list
+                    
+                    # Preserve user's selection if it's still valid
+                    if currentSelection and currentSelection in list:
+                        self.cbPort.set(currentSelection)
+                        logger.debug(f"Preserved user's port selection: {currentSelection}")
+                    elif itemSet != " " and itemSet in list:
+                        self.cbPort.set(itemSet)
+                    elif len(list) > 0:
+                        self.cbPort.set(list[0])
             else:
-                self.cbPort.set(list[0])
-                # set list for Combobox
+                # Update values first
                 self.cbPort['values'] = list
+                
+                # Preserve user's selection if it's still valid
+                if currentSelection and currentSelection in list:
+                    self.cbPort.set(currentSelection)
+                    logger.debug(f"Preserved user's port selection: {currentSelection}")
+                elif len(list) > 0:
+                    self.cbPort.set(list[0])
 
     def chooseBoardVersion(self, event):
         self.setActiveOption()
