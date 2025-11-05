@@ -10,8 +10,6 @@
 from commonVar import *
 # from subprocess import check_call
 import subprocess
-import threading
-import queue  # For thread-safe message passing
 from tkinter import ttk
 from tkinter import filedialog
 import pathlib
@@ -70,8 +68,6 @@ class Uploader:
         # for BiBoard, the mode is the same between Bittle and Nybble now
         self.BiBoardModes = list(map(lambda x: txt(x), ['Standard']))
         self.inv_txt = {v: k for k, v in language.items()}
-        self.previousPortList = []  # Track previous port list for detecting new ports
-        self.portUpdateQueue = queue.Queue()  # Thread-safe queue for port updates
         self.initWidgets()
         if self.strProduct.get() == 'Bittle X' or self.strProduct.get() == 'Bittle X+Arm' or self.strProduct.get() == 'Nybble Q':
             board_version_list = BiBoard_version_list
@@ -84,14 +80,13 @@ class Uploader:
         self.win.protocol('WM_DELETE_WINDOW', self.on_closing)
         self.win.update()
 
+        # For macOS stability: Use main-thread timer instead of background thread
+        # Background threads cause Tkinter crashes on macOS when packaged
         self.keepChecking = True
-        t = threading.Thread(target=keepCheckingPort,
-                             args=(goodPorts, lambda: self.keepChecking, False, self.updatePortlist))
-        t.daemon = True
-        t.start()
+        self.lastPortList = list(portStrList) if portStrList else []
         
-        # Start processing port updates in main thread
-        self.win.after(500, self.processPortUpdates)
+        # Start port checking in main thread using timer
+        self.win.after(500, self.checkPortsMainThread)
 
         self.win.focus_force()    # force the main interface to get focus
         self.win.mainloop()
@@ -313,7 +308,7 @@ class Uploader:
         self.autoupload()
 
     def updatePortlist(self):
-        """Called from background thread - MUST NOT access any Tkinter objects directly"""
+        """Update port list in UI (called from main thread only)"""
         port_number_list = []
         if len(portStrList) == 0:
             port_number_list = [' ']
@@ -326,41 +321,48 @@ class Uploader:
                 port_number_list.append(portName)
             logger.debug(f"port_number_list is {port_number_list}")
         
-        # Put port list update into queue (thread-safe)
-        self.portUpdateQueue.put(port_number_list)
+        # Update UI directly (safe since we're always on main thread now)
+        if self.OSname == 'aqua':
+            self.updatePort()
+        else:
+            if port_number_list:
+                self.cbPort.set(port_number_list[0])
+            self.cbPort['values'] = port_number_list
 
-    def processPortUpdates(self):
-        """Process port updates from queue (runs in main thread)"""
+    def checkPortsMainThread(self):
+        """Check ports in main thread using timer (safe for macOS)"""
+        if not self.keepChecking:
+            return
+            
         try:
-            while not self.portUpdateQueue.empty():
-                port_number_list = self.portUpdateQueue.get_nowait()
+            # Import here to ensure it's available
+            from SerialCommunication import Communication
+            
+            # Get current port list
+            currentPorts = Communication.Print_Used_Com()
+            
+            # Convert to port names only (remove '/dev/' prefix)
+            current_port_names = [p.split('/')[-1] for p in currentPorts]
+            
+            # Check if ports changed
+            if set(current_port_names) != set(self.lastPortList):
+                logger.info(f"Port list changed: {current_port_names}")
                 
-                # Detect new ports
-                current_ports = set(port_number_list) - {' '}
-                previous_ports = set(self.previousPortList) - {' '}
-                new_ports = current_ports - previous_ports
+                # Update global portStrList
+                portStrList.clear()
+                portStrList.extend(current_port_names)
                 
-                # Show notification for new ports
-                if new_ports:
-                    for port in new_ports:
-                        messagebox.showinfo(title=txt('Info'), message=txt('New port prompt') + port)
+                # Update UI using the common method
+                self.updatePortlist()
                 
-                # Update previous port list
-                self.previousPortList = port_number_list.copy()
-                
-                # Update UI
-                if self.OSname == 'aqua':
-                    self.updatePort()
-                else:
-                    if port_number_list:
-                        self.cbPort.set(port_number_list[0])
-                    # set list for Combobox
-                    self.cbPort['values'] = port_number_list
-        except queue.Empty:
-            pass
+                # Update last port list
+                self.lastPortList = current_port_names.copy()
+        except Exception as e:
+            logger.error(f"Error checking ports: {e}")
         
-        # Schedule next check
-        self.win.after(500, self.processPortUpdates)  # Check every 500ms
+        # Schedule next check (every 500ms)
+        if self.keepChecking:
+            self.win.after(500, self.checkPortsMainThread)
     
     def about(self):
         self.msgbox = messagebox.showinfo(txt('titleVersion'), txt('msgVersion'))
@@ -555,6 +557,9 @@ class Uploader:
         prompStr = ""
         counterIMU = 0
         while True:
+            # Use update_idletasks() instead of update() to avoid event loop nesting
+            # This updates the display without processing events, which is safer
+            self.win.update_idletasks()
             time.sleep(0.01)
             if serObj.main_engine.in_waiting > 0:
                 x = str(serObj.main_engine.readline())
@@ -719,266 +724,282 @@ class Uploader:
 
 
     def autoupload(self):
-        with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-            lines = logfile.readlines()
-        time.sleep(1)
-        # Read the first three lines
-        first_three_lines = lines[:3]
-        for line in lines:
-            line = line.strip()  # remove the line break from each line
-            logger.debug(f"{line}")
-            if (".ino.hex" in line) or (".ino.bin" in line):
-                with open("./logfile.log", "w+", encoding="ISO-8859-1") as logfile:
-                    for line in first_three_lines:
-                        logfile.write(line)
-                break
-        logger.info(f"lastSetting: {self.lastSetting}.")
-        strProd = self.strProduct.get()
-        strDefaultPath = self.strFileDir.get()
-        strSoftwareVersion = self.strSoftwareVersion.get()
-        strBoardVersion = self.strBoardVersion.get()
-        strMode = self.inv_txt[self.strMode.get()]
-        self.currentSetting = [strProd, strDefaultPath, strSoftwareVersion, strBoardVersion, strMode]
-        logger.info(f"currentSetting: {self.currentSetting}.")
+        # No need to pause thread anymore - using main-thread timer now
+        try:
+            with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
+                lines = logfile.readlines()
+            time.sleep(1)
+            # Read the first three lines
+            first_three_lines = lines[:3]
+            for line in lines:
+                line = line.strip()  # remove the line break from each line
+                logger.debug(f"{line}")
+                if (".ino.hex" in line) or (".ino.bin" in line):
+                    with open("./logfile.log", "w+", encoding="ISO-8859-1") as logfile:
+                        for line in first_three_lines:
+                            logfile.write(line)
+                    break
+            logger.info(f"lastSetting: {self.lastSetting}.")
+            strProd = self.strProduct.get()
+            strDefaultPath = self.strFileDir.get()
+            strSoftwareVersion = self.strSoftwareVersion.get()
+            strBoardVersion = self.strBoardVersion.get()
+            strMode = self.inv_txt[self.strMode.get()]
+            self.currentSetting = [strProd, strDefaultPath, strSoftwareVersion, strBoardVersion, strMode]
+            logger.info(f"currentSetting: {self.currentSetting}.")
 
-        if self.strFileDir.get() == '' or self.strFileDir.get() == ' ':
-            messagebox.showwarning(txt('Warning'), txt('msgFileDir'))
-            self.force_focus()  # force the main interface to get focus
-            return False
+            if self.strFileDir.get() == '' or self.strFileDir.get() == ' ':
+                messagebox.showwarning(txt('Warning'), txt('msgFileDir'))
+                self.force_focus()  # force the main interface to get focus
+                return False
 
-        # NyBoard_V1_X software version are all the same
-        if "NyBoard_V1" in strBoardVersion:
-            pathBoardVersion = "NyBoard_V1"
-        else:
-            pathBoardVersion = strBoardVersion
-
-        if strProd == "Bittle X":
-            strProdPath = "Bittle"
-        elif strProd == "Bittle X+Arm":
-            strProdPath = "BittleX+Arm"
-        elif strProd == "Nybble Q":
-            strProdPath = "Nybble"
-        else:
-            strProdPath = strProd
-        path = self.strFileDir.get() + '/' + strSoftwareVersion + '/' + strProdPath + '/' + pathBoardVersion + '/'
-
-        if self.OSname == 'x11' or self.OSname == 'aqua':
-            port = '/dev/' + self.strPort.get()
-        else:
-            port = self.strPort.get()
-        logger.info(f"{self.strPort.get()}")
-        if port == ' ' or port == '':
-            messagebox.showwarning(txt('Warning'), txt('msgPort'))
-            self.force_focus()
-            return False
-
-        if strBoardVersion in NyBoard_version_list:
-            if self.bFacReset:
-                fnWriteI = path + 'WriteInstinctAutoInit.ino.hex'
-                fnOpenCat = path + 'OpenCatStandard.ino.hex'
-                self.currentSetting[4] = 'Standard'
+            # NyBoard_V1_X software version are all the same
+            if "NyBoard_V1" in strBoardVersion:
+                pathBoardVersion = "NyBoard_V1"
             else:
-                fnWriteI = path + 'WriteInstinct.ino.hex'
-                fnOpenCat = path + 'OpenCat' + strMode + '.ino.hex'
-            filename = [fnWriteI, fnOpenCat]
-            logger.info(f"{filename}")
-            uploadStage = ['Parameters', 'Main function']
-            for s in range(len(uploadStage)):
-                # if s == 0 and self.bParaUploaded and self.currentSetting[:4] == self.lastSetting[:4]:
-                # for NyBoard uplod mode only
-                if s == 0 and (not self.bParaUpload):
-                    continue               # no need upload configuration firmware
-                # if calibrate IMU failed
-                elif s == 1 and self.bIMUerror:
-                    continue               # no need upload main function firmware
+                pathBoardVersion = strBoardVersion
 
-                self.strStatus.set(txt('Uploading') + txt(uploadStage[s]) + '...' )
-                self.win.update()
-                # self.inProgress = True
-                # status = txt('Uploading') + txt(uploadStage[s]) + '.'
-                # t = threading.Thread(target=self.progressiveDots, args=(status,))
-                # t.start()
-                if self.OSname == 'win32':
-                    avrdudePath = resourcePath + 'avrdudeWin/'
-                elif self.OSname == 'x11':     # Linux
-                    avrdudePath = '/usr/bin/'
-                    path = pathlib.Path(avrdudePath + 'avrdude')
-                    if not path.exists():
-                        messagebox.showwarning(txt('Warning'), txt('msgNoneAvrdude'))
-                        self.force_focus()  # force the main interface to get focus
-                        return False
-                    # avrdudeconfPath = '/etc/avrdude/'      # Fedora / CentOS
-                    avrdudeconfPath = '/etc/'            # Debian / Ubuntu
+            if strProd == "Bittle X":
+                strProdPath = "Bittle"
+            elif strProd == "Bittle X+Arm":
+                strProdPath = "BittleX+Arm"
+            elif strProd == "Nybble Q":
+                strProdPath = "Nybble"
+            else:
+                strProdPath = strProd
+            path = self.strFileDir.get() + '/' + strSoftwareVersion + '/' + strProdPath + '/' + pathBoardVersion + '/'
+
+            if self.OSname == 'x11' or self.OSname == 'aqua':
+                port = '/dev/' + self.strPort.get()
+            else:
+                port = self.strPort.get()
+            logger.info(f"{self.strPort.get()}")
+            if port == ' ' or port == '':
+                messagebox.showwarning(txt('Warning'), txt('msgPort'))
+                self.force_focus()
+                return False
+
+            if strBoardVersion in NyBoard_version_list:
+                if self.bFacReset:
+                    fnWriteI = path + 'WriteInstinctAutoInit.ino.hex'
+                    fnOpenCat = path + 'OpenCatStandard.ino.hex'
+                    self.currentSetting[4] = 'Standard'
                 else:
-                    avrdudePath = resourcePath + 'avrdudeMac/'
+                    fnWriteI = path + 'WriteInstinct.ino.hex'
+                    fnOpenCat = path + 'OpenCat' + strMode + '.ino.hex'
+                filename = [fnWriteI, fnOpenCat]
+                logger.info(f"{filename}")
+                uploadStage = ['Parameters', 'Main function']
+                for s in range(len(uploadStage)):
+                    # if s == 0 and self.bParaUploaded and self.currentSetting[:4] == self.lastSetting[:4]:
+                    # for NyBoard uplod mode only
+                    if s == 0 and (not self.bParaUpload):
+                        continue               # no need upload configuration firmware
+                    # if calibrate IMU failed
+                    elif s == 1 and self.bIMUerror:
+                        continue               # no need upload main function firmware
 
-                try:
-                    # for NyBoard factory reset or upgrade firmware
-                    if s == 0 and self.bIMUerror:    # alread upload configuration firmware,but calibrate IMU failed
-                        pass                         # no need upload configuration firmware again
+                    self.strStatus.set(txt('Uploading') + txt(uploadStage[s]) + '...' )
+                    self.statusBar.update()
+                    # self.inProgress = True
+                    # status = txt('Uploading') + txt(uploadStage[s]) + '.'
+                    # t = threading.Thread(target=self.progressiveDots, args=(status,))
+                    # t.start()
+                    if self.OSname == 'win32':
+                        avrdudePath = resourcePath + 'avrdudeWin/'
+                    elif self.OSname == 'x11':     # Linux
+                        avrdudePath = '/usr/bin/'
+                        path = pathlib.Path(avrdudePath + 'avrdude')
+                        if not path.exists():
+                            messagebox.showwarning(txt('Warning'), txt('msgNoneAvrdude'))
+                            self.force_focus()  # force the main interface to get focus
+                            return False
+                        # avrdudeconfPath = '/etc/avrdude/'      # Fedora / CentOS
+                        avrdudeconfPath = '/etc/'            # Debian / Ubuntu
                     else:
-                        if self.OSname == 'x11':     # Linuxself.OSname == 'x11':     # Linux
-                            # check_call(avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i' % \
-                            #         (port, filename[s]), shell=self.shellOption)
-                            cmd = avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                  filename[s] + ':i'
+                        avrdudePath = resourcePath + 'avrdudeMac/'
+
+                    try:
+                        # for NyBoard factory reset or upgrade firmware
+                        if s == 0 and self.bIMUerror:    # alread upload configuration firmware,but calibrate IMU failed
+                            pass                         # no need upload configuration firmware again
                         else:
-                            # check_call(avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i > ./avrdude_log.txt 2> ./avrdude_errors.txt' % \
-                            #         (port, filename[s]), shell=self.shellOption)
-                            cmd = avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                  filename[s] + ':i'
+                            if self.OSname == 'x11':     # Linuxself.OSname == 'x11':     # Linux
+                                # check_call(avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i' % \
+                                #         (port, filename[s]), shell=self.shellOption)
+                                cmd = avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
+                                      filename[s] + ':i'
+                            else:
+                                # check_call(avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i > ./avrdude_log.txt 2> ./avrdude_errors.txt' % \
+                                #         (port, filename[s]), shell=self.shellOption)
+                                cmd = avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
+                                      filename[s] + ':i'
 
-                        # Run the program and capture output
-                        process = subprocess.Popen(cmd,shell = self.shellOption, stdout = subprocess.PIPE, stderr = subprocess.STDOUT)
-                        output, error = process.communicate()  # Wait for the program to finish
-                        # printH("error:", error)
-                        # printH("output:", output)
+                            # Run the program and capture output
+                            # Allow GUI to update display before blocking operation
+                            self.win.update_idletasks()
+                            process = subprocess.Popen(cmd,shell = self.shellOption, stdout = subprocess.PIPE, stderr = subprocess.STDOUT)
+                            output, error = process.communicate()  # Wait for the program to finish
+                            # Allow GUI to update display after operation
+                            self.win.update_idletasks()
+                            # printH("error:", error)
+                            # printH("output:", output)
 
-                        # Check for errors (optional)
-                        if error:
-                            logger.info(f"Error running program: {error}")
-                        else:
-                            # Write captured output to a file
-                            with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
-                                logfile.write(output.decode())  # Decode bytes to string
-                            time.sleep(1)
+                            # Check for errors (optional)
+                            if error:
+                                logger.info(f"Error running program: {error}")
+                            else:
+                                # Write captured output to a file
+                                with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
+                                    logfile.write(output.decode())  # Decode bytes to string
+                                time.sleep(1)
 
-                            with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-                                lines = logfile.readlines()
-                            time.sleep(1)
+                                with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
+                                    lines = logfile.readlines()
+                                time.sleep(1)
 
-                            for line in lines:
-                                line = line.strip()  # remove the line break from each line
-                                logger.debug(f"{line}")
-                                if ("programmer is not responding" in line) or \
-                                    ("can\'t open device" in line) or \
-                                    ("attempt" in line) or \
-                                    ("error" in line) or ("Errno" in line):
-                                    status = txt(uploadStage[s]) + txt('failed to upload')
-                                    # self.strStatus.set(status)
-                                    # self.statusBar.update()
-                                    # messagebox.showinfo('Petoi Desktop App',txt('checkLogfile'))
-                                    self.showMessage(status)
-                                    return False
+                                for line in lines:
+                                    line = line.strip()  # remove the line break from each line
+                                    logger.debug(f"{line}")
+                                    if ("programmer is not responding" in line) or \
+                                        ("can\'t open device" in line) or \
+                                        ("attempt" in line) or \
+                                        ("error" in line) or ("Errno" in line):
+                                        status = txt(uploadStage[s]) + txt('failed to upload')
+                                        # self.strStatus.set(status)
+                                        # self.statusBar.update()
+                                        # messagebox.showinfo('Petoi Desktop App',txt('checkLogfile'))
+                                        self.showMessage(status)
+                                        return False
 
-                # self.inProgress = False
-                except:
-                    status = txt(uploadStage[s]) + txt('failed to upload')
+                    # self.inProgress = False
+                    except:
+                        status = txt(uploadStage[s]) + txt('failed to upload')
+                        self.strStatus.set(status)
+                        self.statusBar.update()
+                        messagebox.showwarning(txt('Warning'), txt('Replug prompt'))
+                        return False
+                    else:
+                        status = txt(uploadStage[s]) + txt('is successully uploaded')
+                    
                     self.strStatus.set(status)
                     self.statusBar.update()
-                    messagebox.showwarning(txt('Warning'), txt('Replug prompt'))
+
+                    if s == 0:
+                        self.WriteInstinctPrompts(port)
+                    else:
+                        pass
+            elif strBoardVersion in BiBoard_version_list:
+                modeName = "Standard"
+                # fnBootLoader = path + 'OpenCatEsp32Standard.ino.bootloader.bin'
+                fnBootLoader = path + 'OpenCatEsp32' + modeName + '.ino.bootloader.bin'
+                # fnPartitions = path + 'OpenCatEsp32Standard.ino.partitions.bin'
+                fnPartitions = path + 'OpenCatEsp32' + modeName + '.ino.partitions.bin'
+                # fnMainFunc = path + 'OpenCatEsp32Standard.ino.bin '
+                fnMainFunc = path + 'OpenCatEsp32' + modeName + '.ino.bin '
+                fnBootApp = path + 'boot_app0.bin'
+
+                filename = [fnBootLoader, fnPartitions, fnBootApp, fnMainFunc]
+                logger.info(f"{filename}")
+                self.strStatus.set(txt('Uploading') + txt('Main function') + ', ' + txt('Time consuming') + '...' )
+                self.statusBar.update()
+                if self.OSname == 'win32':   # Windows
+                    esptoolPath = resourcePath + 'esptoolWin/'
+                elif self.OSname == 'x11':  # Linux
+                    esptoolPath = '/usr/bin/'
+                    path = pathlib.Path(esptoolPath + 'esptool')
+                    if not path.exists():
+                        messagebox.showwarning(txt('Warning'), txt('msgNoneEsptool'))
+                        self.force_focus()  # force the main interface to get focus
+                        return False
+                else:    # Mac
+                    esptoolPath = resourcePath + 'esptoolMac/'
+                # print()
+                try:
+                    # check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
+                    # (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
+                    # subprocess.check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
+                    #     (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
+                    cmd = esptoolPath + 'esptool --chip esp32 --port ' + port + ' --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 ' \
+                          + filename[0] + \
+                          ' 0x8000 ' + filename[1] + \
+                          ' 0xe000 ' + filename[2] + \
+                          ' 0x10000 ' + filename[3]
+                    # Run the program and capture output
+                    # Allow GUI to update display before blocking operation
+                    self.win.update_idletasks()
+                    process = subprocess.Popen(cmd, shell=self.shellOption, stdout=subprocess.PIPE,
+                                               stderr=subprocess.STDOUT)
+                    output, error = process.communicate()  # Wait for the program to finish
+                    # Allow GUI to update display after operation
+                    self.win.update_idletasks()
+                    # printH("error:", error)
+                    # printH("output:", output)
+
+                    # Check for errors (optional)
+                    if error:
+                        logger.info(f"Error running program: {error}")
+                    else:
+                        # Write captured output to a file
+                        with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
+                            logfile.write(output.decode())  # Decode bytes to string
+                        time.sleep(1)
+
+                        with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
+                            lines = logfile.readlines()
+                        time.sleep(1)
+
+                        for line in lines:
+                            line = line.strip()  # remove the line break from each line
+                            logger.debug(f"{line}")
+                            if ("Traceback" in line) or \
+                                ("Failed to connect to ESP32" in line) or \
+                                ("error" in line) or ("Errno" in line):
+                                status = txt('Main function') + txt('failed to upload')
+                                # self.strStatus.set(status)
+                                # self.statusBar.update()
+                                # messagebox.showinfo('Petoi Desktop App', txt('checkLogfile'))
+                                self.showMessage(status)
+                                return False
+
+                except Exception as e:
+                    printH("Excep:", e)
+                    logger.info(f"Excep: {e}")
+                    status = txt('Main function') + txt('failed to upload')
+                    # self.strStatus.set(status)
+                    # self.statusBar.update()
+                    self.showMessage(status)
                     return False
                 else:
-                    status = txt(uploadStage[s]) + txt('is successully uploaded')
-                
+                    status = txt('Main function') + txt('is successully uploaded')
+                    
                 self.strStatus.set(status)
                 self.statusBar.update()
+                self.WriteInstinctPrompts(port)
 
-                if s == 0:
-                    self.WriteInstinctPrompts(port)
-                else:
-                    pass
-        elif strBoardVersion in BiBoard_version_list:
-            modeName = "Standard"
-            # fnBootLoader = path + 'OpenCatEsp32Standard.ino.bootloader.bin'
-            fnBootLoader = path + 'OpenCatEsp32' + modeName + '.ino.bootloader.bin'
-            # fnPartitions = path + 'OpenCatEsp32Standard.ino.partitions.bin'
-            fnPartitions = path + 'OpenCatEsp32' + modeName + '.ino.partitions.bin'
-            # fnMainFunc = path + 'OpenCatEsp32Standard.ino.bin '
-            fnMainFunc = path + 'OpenCatEsp32' + modeName + '.ino.bin '
-            fnBootApp = path + 'boot_app0.bin'
-
-            filename = [fnBootLoader, fnPartitions, fnBootApp, fnMainFunc]
-            logger.info(f"{filename}")
-            self.strStatus.set(txt('Uploading') + txt('Main function') + ', ' + txt('Time consuming') + '...' )
-            self.win.update()
-            if self.OSname == 'win32':   # Windows
-                esptoolPath = resourcePath + 'esptoolWin/'
-            elif self.OSname == 'x11':  # Linux
-                esptoolPath = '/usr/bin/'
-                path = pathlib.Path(esptoolPath + 'esptool')
-                if not path.exists():
-                    messagebox.showwarning(txt('Warning'), txt('msgNoneEsptool'))
-                    self.force_focus()  # force the main interface to get focus
-                    return False
-            else:    # Mac
-                esptoolPath = resourcePath + 'esptoolMac/'
-            # print()
-            try:
-                # check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
-                # (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
-                # subprocess.check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
-                #     (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
-                cmd = esptoolPath + 'esptool --chip esp32 --port ' + port + ' --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 ' \
-                      + filename[0] + \
-                      ' 0x8000 ' + filename[1] + \
-                      ' 0xe000 ' + filename[2] + \
-                      ' 0x10000 ' + filename[3]
-                # Run the program and capture output
-                process = subprocess.Popen(cmd, shell=self.shellOption, stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT)
-                output, error = process.communicate()  # Wait for the program to finish
-                # printH("error:", error)
-                # printH("output:", output)
-
-                # Check for errors (optional)
-                if error:
-                    logger.info(f"Error running program: {error}")
-                else:
-                    # Write captured output to a file
-                    with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
-                        logfile.write(output.decode())  # Decode bytes to string
-                    time.sleep(1)
-
-                    with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-                        lines = logfile.readlines()
-                    time.sleep(1)
-
-                    for line in lines:
-                        line = line.strip()  # remove the line break from each line
-                        logger.debug(f"{line}")
-                        if ("Traceback" in line) or \
-                            ("Failed to connect to ESP32" in line) or \
-                            ("error" in line) or ("Errno" in line):
-                            status = txt('Main function') + txt('failed to upload')
-                            # self.strStatus.set(status)
-                            # self.statusBar.update()
-                            # messagebox.showinfo('Petoi Desktop App', txt('checkLogfile'))
-                            self.showMessage(status)
-                            return False
-
-            except Exception as e:
-                printH("Excep:", e)
-                logger.info(f"Excep: {e}")
-                status = txt('Main function') + txt('failed to upload')
-                # self.strStatus.set(status)
-                # self.statusBar.update()
-                self.showMessage(status)
-                return False
-            else:
-                status = txt('Main function') + txt('is successully uploaded')
+            self.lastSetting = self.currentSetting
+            if self.bFacReset:
+                self.strMode.set(txt('Standard'))
+            self.saveConfigToFile(defaultConfPath)
                 
-            self.strStatus.set(status)
-            self.statusBar.update()
-            self.WriteInstinctPrompts(port)
-
-        self.lastSetting = self.currentSetting
-        if self.bFacReset:
-            self.strMode.set(txt('Standard'))
-        self.saveConfigToFile(defaultConfPath)
-            
-        # for there is no calibrate IMU error
-        if not self.bIMUerror:
-            print('Finish!')
-            messagebox.showinfo(title=None, message=txt('msgFinish'))
-        self.force_focus()  # force the main interface to get focus
-        return True
+            # for there is no calibrate IMU error
+            if not self.bIMUerror:
+                print('Finish!')
+                messagebox.showinfo(title=None, message=txt('msgFinish'))
+            self.force_focus()  # force the main interface to get focus
+            return True
+        except Exception as e:
+            logger.error(f"Error in autoupload: {e}")
+            return False
         
     def force_focus(self):
         self.win.after(1, lambda: self.win.focus_force())
         
     def on_closing(self):
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
+            # Stop main-thread timer
+            self.keepChecking = False
+            
             self.saveConfigToFile(defaultConfPath)
             logger.info(f"{self.configuration}")
             self.win.destroy()
