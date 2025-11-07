@@ -1042,7 +1042,7 @@ def manualSelect(PortList, window, needSendTask=True, needOpenPort=True):
     l2 = tk.Label(window, font='sans 14 bold')
     l2["text"]=txt('Please select the port from the list')
     l2.grid(row=1,column=0, sticky='w', padx=5)
-    ls = tk.Listbox(window, selectmode="multiple")
+    ls = tk.Listbox(window, selectmode="browse")
     ls.grid(row=2, column=0, sticky='nsew', padx=5, pady=5)
 
     # Map display names to full paths (hide parent directories)

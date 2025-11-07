@@ -83,7 +83,17 @@ class Uploader:
         # For macOS stability: Use main-thread timer instead of background thread
         # Background threads cause Tkinter crashes on macOS when packaged
         self.keepChecking = True
-        self.lastPortList = list(portStrList) if portStrList else []
+        
+        # Initialize lastPortList from actual system ports to avoid false "new port" detection
+        try:
+            from SerialCommunication import Communication
+            currentPorts = Communication.Print_Used_Com()
+            self.lastPortList = [p.split('/')[-1] for p in currentPorts]
+        except:
+            self.lastPortList = list(portStrList) if portStrList else []
+        
+        # Flag to prevent showing "new port" message on first check
+        self.isFirstCheck = True
         
         # Start port checking in main thread using timer
         self.win.after(500, self.checkPortsMainThread)
@@ -260,6 +270,31 @@ class Uploader:
         self.labPort = ttk.Label(fmSerial, text=txt('labPort'), font=('Arial', 16))
         self.labPort.grid(row=0, ipadx=5, padx=5, sticky=W)
         self.cbPort = ttk.Combobox(fmSerial, textvariable=self.strPort, foreground='blue', font=12)    # width=38,
+        
+        # Refresh port list from system to ensure we have all available ports
+        # This is especially important after manual port selection
+        try:
+            from SerialCommunication import Communication
+            
+            # Remember user's manually selected port (if any)
+            user_selected_port = portStrList[0] if len(portStrList) > 0 else None
+            
+            # Get all system ports
+            currentPorts = Communication.Print_Used_Com()
+            current_port_names = [p.split('/')[-1] for p in currentPorts]
+            
+            # Update global portStrList with all system ports
+            portStrList.clear()
+            portStrList.extend(current_port_names)
+            logger.info(f"Refreshed port list from system: {current_port_names}")
+            
+            # If user manually selected a port and it's still available, set it as current selection
+            if user_selected_port and user_selected_port in current_port_names:
+                self.strPort.set(user_selected_port)
+                logger.info(f"Preserved manually selected port: {user_selected_port}")
+        except Exception as e:
+            logger.error(f"Failed to refresh port list: {e}")
+        
         self.updatePortlist()
         self.cbPort.grid(row=1, ipadx=5, padx=5, sticky=W)
 
@@ -360,15 +395,123 @@ class Uploader:
             if set(current_port_names) != set(self.lastPortList):
                 logger.info(f"Port list changed: {current_port_names}")
                 
+                # Detect added and removed ports
+                added_ports = set(current_port_names) - set(self.lastPortList)
+                removed_ports = set(self.lastPortList) - set(current_port_names)
+                
+                # Get current selection
+                currentSelection = self.strPort.get()
+                
                 # Update global portStrList
                 portStrList.clear()
                 portStrList.extend(current_port_names)
                 
-                # Update UI using the common method
-                self.updatePortlist()
+                # Handle port changes
+                if added_ports:
+                    # New port(s) added
+                    logger.info(f"New port(s) added: {added_ports}")
+                    
+                    # Get board version to determine preferred port
+                    boardVer = self.strBoardVersion.get()
+                    added_list = sorted(added_ports)
+                    
+                    # Determine if we should show popup based on board version and ports
+                    should_show_popup = False
+                    preferred_port = None
+                    
+                    if boardVer in BiBoard_version_list:
+                        # For BiBoard, ONLY show popup when wchusbserial is detected
+                        # This avoids duplicate popups when both usbmodem and wchusbserial appear at different times
+                        for port in added_list:
+                            if 'wchusbserial' in port.lower():
+                                preferred_port = port
+                                should_show_popup = True
+                                break
+                        
+                        if not should_show_popup:
+                            # Detected other ports (like usbmodem) but not wchusbserial
+                            # Just update the port list silently, don't popup
+                            logger.info(f"BiBoard: Detected non-preferred ports {added_list}, updating list silently")
+                            self.updatePortlist()
+                    else:
+                        # For NyBoard, prefer usbmodem, then usbserial-
+                        for port in added_list:
+                            if 'usbmodem' in port.lower():
+                                preferred_port = port
+                                should_show_popup = True
+                                break
+                        if not preferred_port:
+                            for port in added_list:
+                                if 'usbserial-' in port.lower():
+                                    preferred_port = port
+                                    should_show_popup = True
+                                    break
+                        # If still not found, use the first one
+                        if not preferred_port and added_list:
+                            preferred_port = added_list[0]
+                            should_show_popup = True
+                    
+                    # Only show popup and auto-select if we found the preferred port
+                    if should_show_popup and preferred_port:
+                        new_port = preferred_port
+                        
+                        # Only show message if this is not the first check
+                        # (to avoid false "new port" message when opening the interface)
+                        if not self.isFirstCheck:
+                            # Show info message for preferred new port
+                            messagebox.showinfo(txt('Info'), txt('New port prompt') + new_port)
+                            self.force_focus()  # Force the main interface to get focus
+                            
+                            # Update UI and auto-select new port
+                            if self.OSname == 'aqua':
+                                # For macOS, update port list and it will handle selection
+                                self.updatePort()
+                                # But we want to force select the preferred new port
+                                if new_port in current_port_names:
+                                    self.cbPort.set(new_port)
+                            else:
+                                # For Windows/Linux, directly update and select
+                                self.cbPort['values'] = current_port_names
+                                self.cbPort.set(new_port)
+                            
+                            logger.info(f"Auto-selected preferred new port: {new_port}")
+                        else:
+                            # First check, just update UI without popup
+                            logger.info(f"First check - detected ports without popup: {added_ports}")
+                            self.updatePortlist()
+                    
+                elif removed_ports:
+                    # Port(s) removed
+                    logger.info(f"Port(s) removed: {removed_ports}")
+                    
+                    # Check if current selection was removed
+                    if currentSelection in removed_ports:
+                        logger.info(f"Current port {currentSelection} was removed")
+                        
+                        # Update UI
+                        if self.OSname == 'aqua':
+                            self.updatePort()
+                        else:
+                            self.cbPort['values'] = current_port_names
+                            if len(current_port_names) > 0:
+                                # Select first available port
+                                self.cbPort.set(current_port_names[0])
+                                logger.info(f"Switched to first available port: {current_port_names[0]}")
+                            else:
+                                # No ports available, set to empty
+                                self.cbPort.set('')
+                                logger.info("No ports available, cleared selection")
+                    else:
+                        # Current selection still valid, just update list
+                        self.updatePortlist()
                 
                 # Update last port list
                 self.lastPortList = current_port_names.copy()
+                
+                # Clear first check flag after first detection
+                if self.isFirstCheck:
+                    self.isFirstCheck = False
+                    logger.debug("First check completed, future changes will show notifications")
         except Exception as e:
             logger.error(f"Error checking ports: {e}")
         
@@ -423,7 +566,7 @@ class Uploader:
                         elif 'usbserial-' in item:  # prefer the "serial-" device
                             itemSet = item
                             break
-                    
+                            
                     # Remove unwanted ports (need to use list() to avoid modification during iteration)
                     items_to_remove = []
                     for item in list:
@@ -453,7 +596,7 @@ class Uploader:
                         elif 'serial-' in item:  # prefer the "serial-" device
                             itemSet = item
                             break
-                    
+                            
                     # Remove unwanted ports (need to use list() to avoid modification during iteration)
                     items_to_remove = []
                     for item in list:
@@ -868,12 +1011,12 @@ class Uploader:
                                 # check_call(avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i' % \
                                 #         (port, filename[s]), shell=self.shellOption)
                                 cmd = avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                      filename[s] + ':i'
+                                    filename[s] + ':i'
                             else:
                                 # check_call(avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i > ./avrdude_log.txt 2> ./avrdude_errors.txt' % \
                                 #         (port, filename[s]), shell=self.shellOption)
                                 cmd = avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                      filename[s] + ':i'
+                                    filename[s] + ':i'
 
                             # Run the program and capture output
                             # Allow GUI to update display before blocking operation
@@ -961,15 +1104,15 @@ class Uploader:
                     # subprocess.check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
                     #     (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
                     cmd = esptoolPath + 'esptool --chip esp32 --port ' + port + ' --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 ' \
-                          + filename[0] + \
-                          ' 0x8000 ' + filename[1] + \
-                          ' 0xe000 ' + filename[2] + \
-                          ' 0x10000 ' + filename[3]
+                        + filename[0] + \
+                        ' 0x8000 ' + filename[1] + \
+                        ' 0xe000 ' + filename[2] + \
+                        ' 0x10000 ' + filename[3]
                     # Run the program and capture output
                     # Allow GUI to update display before blocking operation
                     self.win.update_idletasks()
                     process = subprocess.Popen(cmd, shell=self.shellOption, stdout=subprocess.PIPE,
-                                               stderr=subprocess.STDOUT)
+                                            stderr=subprocess.STDOUT)
                     output, error = process.communicate()  # Wait for the program to finish
                     # Allow GUI to update display after operation
                     self.win.update_idletasks()
