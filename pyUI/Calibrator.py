@@ -118,7 +118,7 @@ class Calibrator:
         if self.model == 'Chero':
             self.frameCalibButtons.grid(row=0, column=2, rowspan=14)  # Column 2 (middle) - increased by 1
         else:
-            self.frameCalibButtons.grid(row=0, column=3, rowspan=14)  # Original position - increased by 1
+            self.frameCalibButtons.grid(row=0, column=3, rowspan=13)  # Original position - increased by 1
         calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
         standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
         restButton = Button(self.frameCalibButtons, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
@@ -126,12 +126,20 @@ class Calibrator:
         saveButton = Button(self.frameCalibButtons, text=txt('Save'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['s', 0]))
         abortButton = Button(self.frameCalibButtons, text=txt('Abort'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['a', 0]))
 #        quitButton = Button(self.frameCalibButtons, text=txt('Quit'),fg = 'blue', width=self.calibButtonW, command=self.closeCalib)
-        calibButton.grid(row=7, column=0)
-        restButton.grid(row=7, column=1)
-        standButton.grid(row=7, column=2)
-        walkButton.grid(row=12, column=0)
-        saveButton.grid(row=12, column=1)
-        abortButton.grid(row=12, column=2)
+        if self.model == 'Chero':
+            calibButton.grid(row=7, column=0)
+            restButton.grid(row=7, column=1)
+            standButton.grid(row=7, column=2)
+            walkButton.grid(row=12, column=0)
+            saveButton.grid(row=12, column=1)
+            abortButton.grid(row=12, column=2)
+        else:
+            calibButton.grid(row=6, column=0)
+            restButton.grid(row=6, column=1)
+            standButton.grid(row=6, column=2)
+            walkButton.grid(row=11, column=0)
+            saveButton.grid(row=11, column=1)
+            abortButton.grid(row=11, column=2)
 #        quitButton.grid(row=11, column=2)
 
         self.OSname = self.winCalib.call('tk', 'windowingsystem')
@@ -164,15 +172,18 @@ class Calibrator:
         Hovertip(self.imgWiring, txt('tipImgWiring'))
 
         self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
-        self.imgPosture.grid(row=3, column=0, rowspan=3, columnspan=3)
+        if self.model == 'Chero':
+            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
+        else:
+            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
 
         # For Chero, show only 6 joints; for others, show 16 joints
         if self.model == 'Chero':
-            numJoints = 6
+            self.numJoints = 6
         else:
-            numJoints = 16
+            self.numJoints = 16
 
-        for i in range(numJoints):
+        for i in range(self.numJoints):
             if self.model == 'Chero':
                 # Chero layout: joints 0,1 horizontal, joints 2,3,4,5 vertical (like DoF16 joints 8,9,10,11)
                 if i < 2:  # Joints 0, 1 - horizontal
@@ -330,6 +341,7 @@ class Calibrator:
                 result = send(goodPorts, ['c', 0])
             else:
                 result = send(goodPorts, [cmd, 0])
+            # print("result:", result)
 
             if result != -1:
                 offsets = result[1]
@@ -340,7 +352,10 @@ class Calibrator:
                 import re
                 # Extract all numeric values (including negative numbers)
                 numeric_matches = re.findall(r'-?\d+(?:\.\d+)?', offsets)
-                
+                # remove the first self.numJoints values
+                numeric_matches = numeric_matches[self.numJoints:]
+                # print("numeric_matches:", numeric_matches)
+
                 # Filter out values that are clearly not joint offsets
                 # Joint offsets should be reasonable values (typically between -50 and 50)
                 cleaned_offsets = []
@@ -352,7 +367,7 @@ class Calibrator:
                             cleaned_offsets.append(value)
                     except ValueError:
                         continue
-                
+                # print("cleaned_offsets:", cleaned_offsets)
                 # If we don't have enough valid offsets, try alternative parsing
                 if len(cleaned_offsets) < 6:  # Need at least 6 for Chero
                     # Try to find comma-separated values
@@ -370,11 +385,10 @@ class Calibrator:
                 while len(cleaned_offsets) < 16:
                     cleaned_offsets.append(0.0)
                 
-                # Take only the first 16 values
-                offsets = cleaned_offsets[:16]
-                print("Cleaned offsets:", offsets[:6] if self.model == 'Chero' else offsets)
+                offsets = cleaned_offsets[:self.numJoints]
+                # print("cleaned_offsets:", cleaned_offsets)
             else:
-                offsets = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ]
+                offsets = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
             if cmd == 'c-2':
                 print("offset2:", offsets[2])
@@ -399,7 +413,12 @@ class Calibrator:
         elif cmd == 'walk':
             self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Walk.jpeg', imageW)
             send(goodPorts, ['kwkF', 0])
-        self.imgPosture.grid(row=3, column=0, rowspan=3, columnspan=3)
+
+        if self.model == 'Chero':
+            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
+        else:
+            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
+
         Hovertip(self.imgPosture, txt('tipImgPosture'))
         self.winCalib.update()
 
