@@ -1,10 +1,8 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
-#
-# PetoiRobot is a wrapper for ardSerial
-# This example uses all source functions in ardSerial
+# -*- coding: utf-8 -*-
 
-#from ardSerial import *
+# PetoiRobot is a wrapper for ardSerial.
+# This example uses all source functions in ardSerial.
 from PetoiRobot import *
 
 # the following skill arrays are identical to those in InstinctBittle.h
@@ -280,8 +278,8 @@ if __name__ == '__main__':
             # turn off the gyroscope
             ['g',0.1],
             
-            # turn off the random behavior
-#            ['z',0.1],
+            # turn on/off the random behavior, retun 'Z' to turn on, 'z' to turn off
+            # ['z',0.1],
 
             # - 'kbalance' indicates the command to control Bittle to stand normally
             # - 1 indicates the postponed time after finishing the command, in seconds
