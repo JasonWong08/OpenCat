@@ -3,6 +3,8 @@
 
 # PetoiRobot is a wrapper for ardSerial.
 # Test all skills of Bittle.
+import sys
+sys.path.append("..")
 from PetoiRobot import *
 
 model = 'Bittle'

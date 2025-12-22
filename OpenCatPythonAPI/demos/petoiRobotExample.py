@@ -3,6 +3,8 @@
 
 # PetoiRobot is a wrapper for ardSerial.
 # Test the API of PetoiRobot.
+import sys
+sys.path.append("..")
 from PetoiRobot import *
 
 autoConnect()

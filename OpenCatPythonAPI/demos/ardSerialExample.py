@@ -3,6 +3,8 @@
 
 # PetoiRobot is a wrapper for ardSerial.
 # This example uses all source functions in ardSerial.
+import sys
+sys.path.append("..")
 from PetoiRobot import *
 
 # the following skill arrays are identical to those in InstinctBittle.h
