@@ -1,8 +1,10 @@
 #!/usr/bin/python3
-#  -*- coding: UTF-8 -*-
+#  -*- coding: utf-8 -*-
 
-# MindPlus
-# Python
+# PetoiRobot is a wrapper for ardSerial.
+# Test the API of PetoiRobot.
+import sys
+sys.path.append("..")
 from PetoiRobot import *
 
 autoConnect()

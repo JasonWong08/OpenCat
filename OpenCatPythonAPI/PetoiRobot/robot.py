@@ -1,27 +1,29 @@
-#  -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 # MindPlus
 # Python
 from .ardSerial import *
-from .SerialCommunication import *
-import struct
-import time
-import re
-import platform
-import os
+#from .SerialCommunication import *
+# import struct
+# import time
+# import re
+# import platform
+# import os
 
 intoCameraMode = False
+intoGestureMode = False
+backTouchMode = False
 
 if platform.system() == "Windows":    # for Windows
-    seperation = '\\'
+    separation = '\\'
     homeDri = os.getenv('HOMEDRIVE') 
     homePath = os.getenv('HomePath') 
     configDir = homeDri + homePath
 else:  # for Linux & macOS
-    seperation = '/'
+    separation = '/'
     home = os.getenv('HOME') 
     configDir = home 
-configDir = configDir + seperation +'.config' + seperation +'Petoi'
+configDir = configDir + separation +'.config' + separation +'Petoi'
 
 modelName = 'Bittle'
 
@@ -30,7 +32,8 @@ def printH(head, value):
     print(head, end=' ')
     print(value)
 
-printH("Mind+ date: ", "Feb 25, 2025")
+if not config.SHOW_GUI:
+    printH("Mind+ date: ", "Dec 9, 2025")
 
 
 def makeDirectory(path):
@@ -44,18 +47,18 @@ def makeDirectory(path):
     isExists = os.path.exists(path)
     
     if not isExists:
-        # printH("model name:", path.split(seperation)[-1])
-        if path.split(seperation)[-1] == "BittleX+Arm":
-            path = seperation.join(path.split(seperation)[:-1]) + seperation + "BittleR"
+        # printH("model name:", path.split(separation)[-1])
+        if path.split(separation)[-1] == "BittleX+Arm":
+            path = separation.join(path.split(separation)[:-1]) + separation + "BittleR"
             # printH("path:", path)
             if not os.path.exists(path):
                 # Create the directory if it does not exist
-                path = seperation.join(path.split(seperation)[:-1]) + seperation + "BittleX+Arm"
+                path = separation.join(path.split(separation)[:-1]) + separation + "BittleX+Arm"
                 os.makedirs(path)
                 print(path + ' creat successfully')
             else:
                 # Change the directory name "BittleR" to "BittleX+Arm"
-                os.rename(path,seperation.join(path.split(seperation)[:-1]) + seperation + "BittleX+Arm")
+                os.rename(path,separation.join(path.split(separation)[:-1]) + separation + "BittleX+Arm")
                 # print("Rename successfully!")
         else:
             # Create the directory if it does not exist
@@ -127,9 +130,9 @@ modelDict = {'Bittle': BittleData, 'Nybble': NybbleData, 'BittleX+Arm': BittleRD
 
 def creatSkillFile():
     for key in modelDict:
-        modelDir = configDir + seperation + 'SkillLibrary' + seperation + key
+        modelDir = configDir + separation + 'SkillLibrary' + separation + key
         makeDirectory(modelDir)
-        filePath = modelDir + seperation + 'skillFileName.md'
+        filePath = modelDir + separation + 'skillFileName.md'
         if not os.path.exists(filePath):
             try:
                 with open(filePath, 'w+', encoding="utf-8") as f:
@@ -153,20 +156,51 @@ def getPortList():
 
 # deactivate the gyro
 def deacGyro():
-    boardVer = config.version_
-    # printH("boardVer:", boardVer)
-    if boardVer[0] == 'N':
-        res = send(goodPorts, ['G', 0])
-        # printH("gyro status:",res )
-        logger.debug(f'gyro status:{res}')
-        if res != -1 and res[0][0] == 'G':
-            res = send(goodPorts, ['G', 0])
-            # printH("gyro status:",res )
-            logger.debug(f'gyro status:{res}')
-    else:
-        res = send(goodPorts, ['gb', 0])
-        if res != -1 and res[0][0] == 'g':
-            logger.debug(f'gyro is deactived successfully.')
+    """
+    关闭陀螺仪 - 支持多个不同型号的设备
+    遍历所有连接的串口，根据每个设备的 boardVer 发送相应的陀螺仪关闭命令
+    """
+    # 遍历所有连接的串口
+    for serialObj, portName in goodPorts.items():
+        try:
+            # 向该串口查询设备信息
+            result = sendTask(goodPorts, serialObj, ['?', 0], 2)
+            
+            if result != -1:
+                # 解析设备型号和版本
+                parse = result[1].replace('\r','').split('\n')
+                boardVer = None
+                # modelName = None
+                
+                for l in range(len(parse)):
+                    if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l]:
+                        # modelName = parse[l]
+                        boardVer = parse[l+1]
+                        # print(f'Port {portName}: {modelName}')
+                        # printH(f"Port {portName} boardVer:", boardVer)
+                        break
+                
+                if boardVer is not None:
+                    # 根据 boardVer 发送相应的陀螺仪关闭命令
+                    if boardVer[0] == 'N':
+                        # NyBoard: 发送 'G' 命令
+                        res = sendTask(goodPorts, serialObj, ['G', 0])
+                        logger.debug(f'Port {portName}: gyro status = {res}')
+                        if res != -1 and res[0][0] == 'G':
+                            res = sendTask(goodPorts, serialObj, ['G', 0])
+                            logger.debug(f'Port {portName}: gyro status = {res}')
+                    else:
+                        # BiBoard: 发送 'gb' 命令
+                        res = sendTask(goodPorts, serialObj, ['gb', 0])
+                        if res != -1 and res[0][0] == 'g':
+                            logger.debug(f'Port {portName}: gyro is deactivated successfully.')
+                else:
+                    print(f'* Port {portName}: No board version found!')
+            else:
+                print(f'* Port {portName}: Cannot get device information!')
+                
+        except Exception as e:
+            logger.error(f'Port {portName}: Error in deacGyro - {e}')
 
 
 # get the current angle list of all joints
@@ -308,7 +342,7 @@ def printSkillFileName():
     else:
         modelName = config.model_
     printH("modelName:", modelName)
-    skillDir = configDir + seperation + 'SkillLibrary' + seperation + modelName
+    skillDir = configDir + separation + 'SkillLibrary' + separation + modelName
     skill_file_name=file_name(skillDir)
     print("*** The skill names you can call are as follows: ***")
     for skillName in skill_file_name:
@@ -331,11 +365,20 @@ def openPort(port):
     deacGyro()
 
 
-# auto connect serial ports
+# auto connect serial ports with smart configuration
 def autoConnect():
-    connectPort(goodPorts)
+    """
+    智能自动连接串口，支持配置文件持久化
+    按照优化的逻辑：只检查有效串口和新增串口，避免重复检查已知无效的串口
+    """
+    # 调用 ardSerial.py 中的 smartConnectPorts 函数
+    smartConnectPorts()
+    
+    # 打印可用技能名称
     logger.debug(f'goodPorts: {goodPorts}')
     printSkillFileName()
+    
+    # 关闭陀螺仪
     deacGyro()
     
 
@@ -394,9 +437,9 @@ def loadSkill(fileName, delayTime):
     global modelName
     # get the path of the exported skill file
     if ".md" in fileName:
-        skillFilePath = configDir + seperation + 'SkillLibrary' + seperation + modelName + seperation + fileName
+        skillFilePath = configDir + separation + 'SkillLibrary' + separation + modelName + separation + fileName
     else:
-        skillFilePath = configDir + seperation + 'SkillLibrary' + seperation + modelName + seperation + fileName +'.md'
+        skillFilePath = configDir + separation + 'SkillLibrary' + separation + modelName + separation + fileName +'.md'
 
     logger.debug(f'skillFilePath:{skillFilePath}')
 
@@ -464,9 +507,28 @@ def sendLongCmd(token, var, delayTime):
     send(goodPorts,[token, var, delayTime])
 
 
+# check if a string can be converted to a numeric value
+def isNumeric(s):
+    """
+    Check if a string can be converted to a numeric value (int or float)
+    """
+    s = s.strip()  # remove leading/trailing whitespace
+    if not s:  # empty string
+        return False
+    
+    # Handle negative numbers
+    if s.startswith('-'):
+        s = s[1:]
+    
+    # Check if it's a valid number (integer or float)
+    if s.replace('.', '').isdigit():
+        return True
+    return False
+
 # get value from a request
 def getValue(task, dataType ="int"):
     rawData = send(goodPorts, task)
+    value = -1
     if rawData!=-1:
         logger.debug(f'rawData={rawData}')
         # result = rawData[1][:-2]
@@ -476,9 +538,17 @@ def getValue(task, dataType ="int"):
             index = result.find("=") + 1
             try:
                 if dataType == "float":
-                    value = float(result[index:])
+                    if isNumeric(result[index:]):
+                        value = float(result[index:])
+                    else:
+                        # print(f'* Invalid float value: "{result[index:]}"')
+                        value = float(-1)
                 elif dataType == "int":
-                    value = int(result[index:])
+                    if isNumeric(result[index:]):
+                        value = int(result[index:])
+                    else:
+                        # print(f'* Invalid int value: "{result[index:]}"')
+                        value = int(-1)
                 elif dataType == "tuple":
                     tmpList = result[index:].split('\t')
                     sizeStr = tmpList[2].split(' ')
@@ -497,11 +567,13 @@ def getValue(task, dataType ="int"):
                 print('* Got value error!')
                 raise e
         else:
-            value = (-255, -255, 0, 0)
+            if dataType == "tuple":
+                value = (-255, -255, 0, 0)
             print('* No value got!')
         return value
     else:
-        value = (-255, -255, 0, 0)
+        if dataType == "tuple":
+            value = (-255, -255, 0, 0)
         print('* No value got!')
         return value
 
@@ -509,14 +581,14 @@ def getValue(task, dataType ="int"):
 # get analog value of a pin
 def readAnalogValue(pin):
     token = 'R'
-    task = [token, [97, pin], 0]
+    task = [token, [97, int(pin)], 0]
     return getValue(task)
     
 
 # get digital value of a pin
 def readDigitalValue(pin):
     token = 'R'
-    task = [token, [100, pin], 0]
+    task = [token, [100, int(pin)], 0]
 
     # p = getPortList()
     # rawData = sendTask(goodPorts, p[0], task)
@@ -528,6 +600,13 @@ def readUltrasonicDistance(triggerPin, echoPin):
     token = 'XU'
     task = [token, [int(triggerPin), int(echoPin)], 0]
     return getValue(task, dataType ="float")
+
+# modeDict = {'Serial': 0, 'Camera': 1, 'Voice': 2, 'DoubleTouch': 3, 
+#             'DoubleLight': 4, 'DoubleIRdistance': 5, 'PIR': 6, 
+#             'BackTouch': 7, 'Ultrasonic': 8, 'Gesture': 9, 'QuickDemo': 10}
+modeDict = {'Serial': 0, 'Voice': 1, 'DoubleTouch': 2, 
+            'DoubleLight': 3, 'DoubleIRdistance': 4, 'PIR': 5, 
+            'BackTouch': 6, 'Ultrasonic': 7, 'Gesture': 8, 'Camera': 9, 'QuickDemo': 10}
 
 # get the coordinates of the identified target from camera module
 def readCameraCoordinate():
@@ -542,35 +621,140 @@ def readCameraCoordinate():
             p = re.compile(r'^(?=.*[01])(?=.*,).+$', flags=re.MULTILINE)
             if res[1] != '':
                 logger.debug(f'res[1]={res[1]}')
-                for one in p.findall(res[1]):
-                    val = re.sub('\t','',one)
-                val = val.replace('\r','').replace('\n','')    # delete '\r\n'
-                strFlagList = val.split(',')[:-1]
-                flagList = list(map(lambda x:int(x),strFlagList))    # flag value have to be integer
-                logger.debug(f'flagList={flagList}')
-                if flagList[9] == 1:
+                if "sit" in res[1]:    # via Bluetooth serial port
                     task = ['XCp', 0]
                     intoCameraMode = True
                     return getValue(task, dataType ="tuple")
-                else:
-                    tup = (0,0)
-                    print("No target detected!")
-                    return tup
+                else:    # via USB serial port
+                    for one in p.findall(res[1]):
+                        val = re.sub('\t','',one)
+                    val = val.replace('\r','').replace('\n','')    # delete '\r\n'
+                    strFlagList = val.split(',')[:-1]
+                    flagList = list(map(lambda x:int(x),strFlagList))    # flag value have to be integer
+                    logger.debug(f'flagList={flagList}')
+                    if flagList[modeDict['Camera']] == 1:
+                        task = ['XCp', 0]
+                        intoCameraMode = True
+                        return getValue(task, dataType ="tuple")
+                    else:
+                        tup = (0,0)
+                        print("No target detected!")
+                        return tup
             else:
                 task = ['XCp', 0]
                 intoCameraMode = True
                 return getValue(task, dataType ="tuple")
-            
     else:
         # printH("intoCameraMode is:",intoCameraMode)
         task = ['XCp', 0]
         return getValue(task, dataType ="tuple")
 
 
+# get the gesture value from gesture sensor
+# The gesture value meaning: -1: No gesture detected; 0: Up; 1: Down; 2: Left; 3: Right.
+def readGestureVal():
+    global intoGestureMode
+    # Check if the camera task isactivated.
+    if intoGestureMode == False:
+        res = send(goodPorts, ['XGr', 0])
+        if res != -1 :
+            # printH("intoGestureMode is:",intoGestureMode)
+            logger.debug(f'res={res}')
+            # p = re.compile(r'^(.*),',re.MULTILINE)
+            p = re.compile(r'^(?=.*[01])(?=.*,).+$', flags=re.MULTILINE)
+            if res[1] != '':
+                logger.debug(f'res[1]={res[1]}')
+                for one in p.findall(res[1]):
+                    val = re.sub('\t','',one)
+                val = val.replace('\r','').replace('\n','')    # delete '\r\n'
+                strFlagList = val.split(',')[:-1]
+                flagList = list(map(lambda x:int(x),strFlagList))    # flag value have to be integer
+                logger.debug(f'flagList={flagList}')
+                if flagList[modeDict['Gesture']] == 1:
+                    task = ['XGp', 0]
+                    intoGestureMode = True
+                    return getValue(task, dataType ="int")
+                else:
+                    val = -1
+                    print("No gesture detected!")
+                    return val
+            else:
+                task = ['XGp', 0]
+                intoGestureMode = True
+                return getValue(task, dataType ="int")
+    else:
+        # printH("intoGestureMode is:",intoGestureMode)
+        task = ['XGp', 0]
+        return getValue(task, dataType ="int")
+
+
+# get the back touch sensor value from back touch sensor
+# The back touch value meaning: 0: No touch detected; 1: Front Left; 2: Front Right; 3: Center; 4: Back.
+def readBackTouchSensorVal():
+    touchPadMap = [1, 3, 4, 2]
+    touchLocation = ["Front Left", "Front Right", "Center", "Back"]
+    backTouchID = -1
+
+    global backTouchMode
+    # Check if the back touch mode is deactivated.
+    if backTouchMode == False:
+        res = send(goodPorts, ['X?', 0])
+        if res != -1 :
+            # printH("backTouchMode is:", backTouchMode)
+            logger.debug(f'res={res}')
+            # p = re.compile(r'^(.*),',re.MULTILINE)
+            p = re.compile(r'^(?=.*[01])(?=.*,).+$', flags=re.MULTILINE)
+            if res[1] != '':
+                logger.debug(f'res[1]={res[1]}')
+                for one in p.findall(res[1]):
+                    val = re.sub('\t','',one)
+                val = val.replace('\r','').replace('\n','')    # delete '\r\n'
+                strFlagList = val.split(',')[:-1]
+                flagList = list(map(lambda x:int(x),strFlagList))    # flag value have to be integer
+                logger.debug(f'flagList={flagList}')
+                if flagList[modeDict['BackTouch']] == 1:
+                    res = send(goodPorts, ['Xb', 0])
+                    if res != -1 :
+                        # printH("backTouchMode is:", backTouchMode)
+                        logger.debug(f'res={res}')
+                        # p = re.compile(r'^(.*),',re.MULTILINE)
+                        p = re.compile(r'^(?=.*[01])(?=.*,).+$', flags=re.MULTILINE)
+                        if res[1] != '':
+                            logger.debug(f'res[1]={res[1]}')
+                            for one in p.findall(res[1]):
+                                val = re.sub('\t','',one)
+                            val = val.replace('\r','').replace('\n','')    # delete '\r\n'
+                            strFlagList = val.split(',')[:-1]
+                            flagList = list(map(lambda x:int(x),strFlagList))    # flag value have to be integer
+                            logger.debug(f'flagList={flagList}')
+                            if flagList[modeDict['BackTouch']] == 1:
+                                backTouchMode = True
+
+    # printH("backTouchMode:", backTouchMode)
+    if backTouchMode is False:
+        token = 'R'
+        task = [token, [97, 38], 0]
+        touchReading = getValue(task)
+        # printH("touchReading:", touchReading)
+        if touchReading > 0 and touchReading < 600:
+            print("Please check the connection between the back touch sensor and the mainboard!")
+        elif touchReading < 2400:
+            # printH("index:", int(touchReading / 600))
+            backTouchID = touchPadMap[int(touchReading / 600)]
+            printH("Touched:", touchLocation[backTouchID - 1])
+        else:
+            backTouchID = 0
+            # print("No touch detected!")
+    else:
+        print("Back touch mode is not deactivated!")
+    
+    return backTouchID
+    
+
 # set analog value of a pin
 def writeAnalogValue(pin, val):
     token = 'W'
-    task = [token, [97, pin, val], 0]
+    task = [token, [97, int(pin), val], 0]
 
     rawData = send(goodPorts, task)
 
@@ -578,7 +762,7 @@ def writeAnalogValue(pin, val):
 # set digital value of a pin
 def writeDigitalValue(pin, val):
     token = 'W'
-    task = [token, [100, pin, val], 0]
+    task = [token, [100, int(pin), val], 0]
 
     rawData = send(goodPorts, task)
 
