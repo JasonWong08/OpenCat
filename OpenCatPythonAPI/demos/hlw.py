@@ -1,8 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import sys
-sys.path.append("..")
 from PetoiRobot import *
 
 hlw = [ # customized gait that takes smaller steps ajusted for the costume

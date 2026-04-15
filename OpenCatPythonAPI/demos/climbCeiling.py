@@ -3,8 +3,6 @@
 
 # A complex skill to make Bittle climb up a steel ceiling with meganets on its feet.
 # Demo: https://youtu.be/ravFaiJzrpo
-import sys
-sys.path.append("..")
 from PetoiRobot import *
 
 if __name__ == '__main__':

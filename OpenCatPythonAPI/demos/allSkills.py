@@ -3,8 +3,7 @@
 
 # PetoiRobot is a wrapper for ardSerial.
 # Test all skills of Bittle.
-import sys
-sys.path.append("..")
+# 依赖：在 OpenCatPythonAPI 目录执行 pip install -r requirements.txt（见上级目录）。
 from PetoiRobot import *
 
 model = 'Bittle'

@@ -1,0 +1,2 @@
+# PetoiRobot via pip from DesktopAppRelease pyUI/PetoiRobot.
+petoi-robot @ git+https://github.com/PetoiCamp/DesktopAppRelease.git@main#subdirectory=pyUI/PetoiRobot
